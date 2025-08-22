@@ -4,6 +4,9 @@ import twentyCRMService from './crm';
 import webhookCRMService from './webhook-crm';
 import emailCRMService from './email-crm';
 import csvCRMService from './csv-crm';
+import databaseCRMService from './database-crm';
+import restCRMService from './rest-crm';
+import browserCRMService from './browser-crm';
 
 interface CRMMethod {
   name: string;
@@ -22,6 +25,24 @@ class MultiCRMService {
         service: twentyCRMService,
         method: 'createLead',
         enabled: true
+      },
+      {
+        name: 'Twenty CRM Database',
+        service: databaseCRMService,
+        method: 'createLeadViaDatabase',
+        enabled: !!process.env.TWENTY_DB_PASSWORD
+      },
+      {
+        name: 'Twenty CRM REST API',
+        service: restCRMService,
+        method: 'createLeadViaRest',
+        enabled: true // Always try REST endpoints
+      },
+      {
+        name: 'Twenty CRM Browser',
+        service: browserCRMService,
+        method: 'createLeadViaBrowser',
+        enabled: !!(process.env.TWENTY_USERNAME && process.env.TWENTY_PASSWORD)
       },
       {
         name: 'Twenty CRM Webhook',
