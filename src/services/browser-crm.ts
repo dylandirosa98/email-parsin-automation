@@ -37,6 +37,41 @@ class BrowserCRMService {
       const page = await browser.newPage();
       
       try {
+        // Utilities to interact with elements by visible text (no CSS :contains)
+        const clickFirstButtonByText = async (texts: string[]): Promise<boolean> => {
+          const selectors = ['button', 'a[role="button"]', '[role="button"]'];
+          for (const text of texts) {
+            const lower = text.toLowerCase();
+            for (const sel of selectors) {
+              try {
+                const handles = await page.$$(sel);
+                for (const h of handles) {
+                  const btnText = (await page.evaluate(el => (el as HTMLElement).innerText || el.textContent || '', h)).trim().toLowerCase();
+                  if (!btnText) continue;
+                  if (btnText === lower || btnText.includes(lower)) {
+                    await h.click();
+                    return true;
+                  }
+                }
+              } catch (e) {
+                // continue
+              }
+            }
+          }
+          return false;
+        };
+
+        const findClickableBySelectors = async (selectors: string[]) => {
+          for (const s of selectors) {
+            try {
+              const h = await page.$(s);
+              if (h) return h;
+            } catch (e) {
+              // continue
+            }
+          }
+          return null;
+        };
         // Set user agent
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
         
@@ -57,108 +92,108 @@ class BrowserCRMService {
             await emailInput.type(this.credentials.username);
             await passwordInput.type(this.credentials.password);
             
-            // Submit form
-            const submitButton = await page.$('button[type="submit"], input[type="submit"], button:contains("Sign"), button:contains("Login")');
-            if (submitButton) {
-              await submitButton.click();
+            // Robust submit: Enter key, then typical submit selectors, then text buttons
+            try {
+              await passwordInput.press('Enter');
               await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+            } catch (e) {}
+
+            const submitHandle = await findClickableBySelectors(['button[type="submit"]', 'input[type="submit"]']);
+            if (submitHandle) {
+              await submitHandle.click();
+              await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+            } else {
+              await clickFirstButtonByText(['Sign in', 'Log in', 'Login', 'Continue', 'Submit']);
+              await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
             }
           }
         }
         
-        // Look for "Add Person" or "Create Lead" buttons
-        const createButtons = [
-          'button:contains("Add Person")',
-          'button:contains("Create Person")',
-          'button:contains("Add Lead")',
-          'button:contains("Create Lead")',
-          'button:contains("New Person")',
-          'button:contains("New Lead")',
+        // Attempt to land on a page with people/contacts actions
+        try { await page.goto(`${this.crmUrl.replace(/\/$/, '')}/people`, { waitUntil: 'networkidle2', timeout: 15000 }); } catch (e) {}
+        try { await page.goto(`${this.crmUrl.replace(/\/$/, '')}/contacts`, { waitUntil: 'networkidle2', timeout: 15000 }); } catch (e) {}
+
+        // Look for "Add Person" or similar (without :contains)
+        const createButton = await findClickableBySelectors([
           '[data-testid="add-person"]',
           '[data-testid="create-person"]',
           '.create-person-button',
           '.add-person-button'
-        ];
-
-        let createButton = null;
-        for (const selector of createButtons) {
-          try {
-            createButton = await page.$(selector);
-            if (createButton) break;
-          } catch (error) {
-            continue;
-          }
-        }
+        ]);
 
         if (createButton) {
           await createButton.click();
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          
-          // Fill in the form fields
-          const nameParts = parsedLead.name.split(' ');
-          const firstName = nameParts[0] || '';
-          const lastName = nameParts.slice(1).join(' ') || '';
-          
-          const fieldMappings = [
-            { selectors: ['input[name="firstName"]', '[data-field="firstName"]', '#firstName'], value: firstName },
-            { selectors: ['input[name="lastName"]', '[data-field="lastName"]', '#lastName'], value: lastName },
-            { selectors: ['input[name="name"]', '[data-field="name"]', '#name'], value: parsedLead.name },
-            { selectors: ['input[name="email"]', '[data-field="email"]', '#email', 'input[type="email"]'], value: parsedLead.email || '' },
-            { selectors: ['input[name="phone"]', '[data-field="phone"]', '#phone', 'input[type="tel"]'], value: parsedLead.phone || '' },
-            { selectors: ['textarea[name="notes"]', '[data-field="notes"]', '#notes', 'textarea'], value: parsedLead.message || '' }
-          ];
-
-          for (const field of fieldMappings) {
-            if (!field.value) continue;
-            
-            for (const selector of field.selectors) {
-              try {
-                const input = await page.$(selector);
-                if (input) {
-                  await input.evaluate((el: any) => el.value = '');
-                  await input.type(field.value);
-                  break;
-                }
-              } catch (error) {
-                continue;
-              }
-            }
+        } else {
+          const clicked = await clickFirstButtonByText(['Add Person', 'Create Person', 'Add Lead', 'Create Lead', 'New Person', 'New Lead', 'Add contact', 'New contact']);
+          if (!clicked) {
+            throw new Error('Could not find create person button');
           }
-          
-          // Submit the form
-          const saveButtons = [
-            'button:contains("Save")',
-            'button:contains("Create")',
-            'button:contains("Submit")',
-            'button[type="submit"]',
-            '[data-testid="save-person"]',
-            '.save-button'
-          ];
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
-          for (const selector of saveButtons) {
+        // Fill in the form fields
+        const nameParts = parsedLead.name.split(' ');
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+        
+        const fieldMappings = [
+          { selectors: ['input[name="firstName"]', '[data-field="firstName"]', '#firstName'], value: firstName },
+          { selectors: ['input[name="lastName"]', '[data-field="lastName"]', '#lastName'], value: lastName },
+          { selectors: ['input[name="name"]', '[data-field="name"]', '#name'], value: parsedLead.name },
+          { selectors: ['input[name="email"]', '[data-field="email"]', '#email', 'input[type="email"]'], value: parsedLead.email || '' },
+          { selectors: ['input[name="phone"]', '[data-field="phone"]', '#phone', 'input[type="tel"]'], value: parsedLead.phone || '' },
+          { selectors: ['textarea[name="notes"]', '[data-field="notes"]', '#notes', 'textarea'], value: parsedLead.message || '' },
+          // UTM fields and source/status if present
+          { selectors: ['input[name="utmSource"]', '[data-field="utmSource"]', '#utmSource', 'select[name="utmSource"]'], value: parsedLead.utmSource || '' },
+          { selectors: ['input[name="utmMedium"]', '[data-field="utmMedium"]', '#utmMedium'], value: parsedLead.utmMedium || '' },
+          { selectors: ['input[name="utmCampaign"]', '[data-field="utmCampaign"]', '#utmCampaign'], value: parsedLead.utmCampaign || '' },
+          { selectors: ['input[name="utmTerm"]', '[data-field="utmTerm"]', '#utmTerm'], value: parsedLead.utmTerm || '' },
+          { selectors: ['input[name="utmContent"]', '[data-field="utmContent"]', '#utmContent'], value: parsedLead.utmContent || '' },
+          { selectors: ['input[name="gclid"]', '[data-field="gclid"]', '#gclid'], value: parsedLead.googleClickId || '' },
+          { selectors: ['input[name="fbclid"]', '[data-field="fbclid"]', '#fbclid'], value: parsedLead.facebookClickId || '' },
+          { selectors: ['input[name="msclkid"]', '[data-field="msclkid"]', '#msclkid'], value: parsedLead.microsoftClickId || '' },
+          { selectors: ['select[name="status"]', '[data-field="status"]', '#status'], value: 'New' },
+          { selectors: ['select[name="source"]', '[data-field="source"]', '#source'], value: (parsedLead.utmSource || '').toString() }
+        ];
+
+        for (const field of fieldMappings) {
+          if (!field.value) continue;
+          
+          for (const selector of field.selectors) {
             try {
-              const saveButton = await page.$(selector);
-              if (saveButton) {
-                await saveButton.click();
-                await new Promise(resolve => setTimeout(resolve, 3000));
+              const input = await page.$(selector);
+              if (input) {
+                await input.evaluate((el: any) => el.value = '');
+                await input.type(field.value);
                 break;
               }
             } catch (error) {
               continue;
             }
           }
-          
-          // Try to extract the created person ID from the URL or page
-          const currentUrl = page.url();
-          const personIdMatch = currentUrl.match(/person[s]?\/([a-f0-9-]+)/i) || currentUrl.match(/id=([a-f0-9-]+)/i);
-          const personId = personIdMatch ? personIdMatch[1] : `browser-${Date.now()}`;
-          
-          logger.info(`Successfully created person via browser automation: ${personId}`);
-          return personId;
-          
-        } else {
-          throw new Error('Could not find create person button');
         }
+        
+        // Submit the form
+        const saveHandle = await findClickableBySelectors([
+          'button[type="submit"]',
+          '[data-testid="save-person"]',
+          '.save-button'
+        ]);
+        if (saveHandle) {
+          await saveHandle.click();
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        } else {
+          await clickFirstButtonByText(['Save', 'Create', 'Submit', 'Add']);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+        
+        // Try to extract the created person ID from the URL or page
+        const currentUrl = page.url();
+        const personIdMatch = currentUrl.match(/person[s]?\/([a-f0-9-]+)/i) || currentUrl.match(/id=([a-f0-9-]+)/i);
+        const personId = personIdMatch ? personIdMatch[1] : `browser-${Date.now()}`;
+        
+        logger.info(`Successfully created person via browser automation: ${personId}`);
+        return personId;
         
       } finally {
         await browser.close();
