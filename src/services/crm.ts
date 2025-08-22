@@ -42,9 +42,9 @@ class TwentyCRMService {
 
     // Try multiple GraphQL approaches for self-hosted Twenty
     const approaches = [
-      {
-        name: 'Dynamic Object Creation',
-        mutation: `
+      async () => {
+        logger.info('Trying GraphQL approach: Dynamic Object Creation');
+        const mutation = `
           mutation CreatePerson($data: JSON!) {
             createOneObject(objectName: "person", data: $data) {
               id
@@ -53,8 +53,8 @@ class TwentyCRMService {
               phone
             }
           }
-        `,
-        variables: {
+        `;
+        const variables = {
           data: {
             name: parsedLead.name,
             email: parsedLead.email,
@@ -73,31 +73,40 @@ class TwentyCRMService {
             formSubmissionTime: parsedLead.formSubmissionTime,
             formType: parsedLead.formType
           }
-        },
-        extractId: (response: any) => response.createOneObject?.id
+        };
+        
+        logger.debug('Mutation:', mutation);
+        logger.debug('Variables:', variables);
+        
+        const response: any = await this.client.request(mutation, variables);
+        return response.createOneObject?.id;
       },
-      {
-        name: 'Generic Object Creation',
-        mutation: `
+      
+      async () => {
+        logger.info('Trying GraphQL approach: Generic Object Creation');
+        const mutation = `
           mutation CreateRecord($objectName: String!, $data: JSON!) {
             createOneObject(objectName: $objectName, data: $data) {
               id
             }
           }
-        `,
-        variables: {
+        `;
+        const variables = {
           objectName: "person",
           data: {
             name: parsedLead.name,
             email: parsedLead.email,
             phone: parsedLead.phone
           }
-        },
-        extractId: (response: any) => response.createOneObject?.id
+        };
+        
+        const response: any = await this.client.request(mutation, variables);
+        return response.createOneObject?.id;
       },
-      {
-        name: 'Simple Person Creation',
-        mutation: `
+      
+      async () => {
+        logger.info('Trying GraphQL approach: Simple Person Creation');
+        const mutation = `
           mutation CreateSimplePerson($name: String!, $email: String, $phone: String) {
             createOneObject(objectName: "person", data: {
               name: $name,
@@ -107,37 +116,34 @@ class TwentyCRMService {
               id
             }
           }
-        `,
-        variables: {
+        `;
+        const variables = {
           name: parsedLead.name,
           email: parsedLead.email,
           phone: parsedLead.phone
-        },
-        extractId: (response: any) => response.createOneObject?.id
+        };
+        
+        const response: any = await this.client.request(mutation, variables);
+        return response.createOneObject?.id;
       }
     ];
 
-    for (const approach of approaches) {
+    for (let i = 0; i < approaches.length; i++) {
       try {
-        logger.info(`Trying GraphQL approach: ${approach.name}`);
-        logger.debug('Mutation:', approach.mutation);
-        logger.debug('Variables:', approach.variables);
-
-        const response: any = await this.client.request(approach.mutation, approach.variables);
-        const leadId = approach.extractId(response);
+        const leadId = await approaches[i]();
         
         if (leadId) {
-          logger.info(`✅ Successfully created person using ${approach.name} with ID: ${leadId}`);
+          logger.info(`✅ Successfully created person using approach ${i + 1} with ID: ${leadId}`);
           return leadId;
         } else {
-          logger.warn(`⚠️ ${approach.name} succeeded but no ID returned:`, response);
+          logger.warn(`⚠️ Approach ${i + 1} succeeded but no ID returned`);
         }
 
       } catch (error) {
-        logger.warn(`❌ ${approach.name} failed:`, error instanceof Error ? error.message : String(error));
+        logger.warn(`❌ Approach ${i + 1} failed:`, error instanceof Error ? error.message : String(error));
         
         // Log detailed error for the first approach only to avoid spam
-        if (approach === approaches[0] && error instanceof Error) {
+        if (i === 0 && error instanceof Error) {
           logger.debug('Detailed error for first approach:', {
             message: error.message,
             response: (error as any).response,
