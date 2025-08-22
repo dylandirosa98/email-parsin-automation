@@ -13,7 +13,7 @@ class TwentyCRMService {
     
     this.client = new GraphQLClient(`${this.apiUrl}/graphql`, {
       headers: {
-        authorization: `Bearer ${apiToken}`,
+        'X-API-Key': apiToken,
         'content-type': 'application/json'
       }
     });
@@ -24,6 +24,7 @@ class TwentyCRMService {
       'google_organic': 'WEBSITE_DIRECT',
       'google_business': 'GOOGLE_BUSINESS_PROFILE',
       'google_ads': 'GOOGLE_ADS',
+      'google_lsas': 'GOOGLE_ADS', // Google Local Services Ads
       'facebook': 'FACEBOOK_ADS',
       'facebook_ads': 'FACEBOOK_ADS',
       'instagram': 'FACEBOOK_ADS',
