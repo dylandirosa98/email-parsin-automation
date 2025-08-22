@@ -38,76 +38,118 @@ class TwentyCRMService {
   }
 
   public async createLead(parsedLead: ParsedLead): Promise<string | null> {
-    try {
-      logger.info(`Creating lead in Twenty CRM: ${parsedLead.name}`);
+    logger.info(`Creating lead in Twenty CRM: ${parsedLead.name}`);
 
-      // Transform parsed lead to CRM format
-      const crmLead = this.transformToCRMFormat(parsedLead);
-      
-      // Validate CRM lead
-      const validation = this.validateCRMLead(crmLead);
-      if (!validation.isValid) {
-        logger.error('CRM lead validation failed:', validation.errors);
-        throw new Error(`Lead validation failed: ${validation.errors.join(', ')}`);
-      }
-
-      // Create GraphQL mutation
-      const mutation = `
-        mutation CreateLead($input: LeadCreateInput!) {
-          createLead(data: $input) {
-            id
-            name
-            email {
-              primaryEmail
+    // Try multiple GraphQL approaches for self-hosted Twenty
+    const approaches = [
+      {
+        name: 'Dynamic Object Creation',
+        mutation: `
+          mutation CreatePerson($data: JSON!) {
+            createOneObject(objectName: "person", data: $data) {
+              id
+              name
+              email
+              phone
             }
-            phone {
-              primaryPhoneNumber
-            }
-            source
-            status
-            utmMedium
-            utmCampaign
-            utmTerm
-            utmContent
-            gclid
-            wbraid
-            fbclid
           }
-        }
-      `;
-
-      const variables = {
-        input: crmLead
-      };
-
-      logger.debug('Sending GraphQL mutation:', { mutation, variables });
-
-      // Execute mutation
-      const response: TwentyCRMResponse = await this.client.request(mutation, variables);
-      
-      const leadId = response.createLead.id;
-      logger.info(`Successfully created lead in CRM with ID: ${leadId}`, {
-        name: response.createLead.name,
-        email: response.createLead.email?.primaryEmail,
-        source: response.createLead.source
-      });
-
-      return leadId;
-
-    } catch (error) {
-      logger.error('Failed to create lead in Twenty CRM:', error);
-      
-      // Log additional details for debugging
-      if (error instanceof Error) {
-        logger.error('Error details:', {
-          message: error.message,
-          stack: error.stack,
-          leadData: parsedLead
-        });
+        `,
+        variables: {
+          data: {
+            name: parsedLead.name,
+            email: parsedLead.email,
+            phone: parsedLead.phone,
+            address: parsedLead.address,
+            city: parsedLead.city,
+            zipCode: parsedLead.zipCode,
+            source: this.sourceMapping[parsedLead.utmSource as UTMSource] || 'WEBSITE_DIRECT',
+            utmMedium: parsedLead.utmMedium,
+            utmCampaign: parsedLead.utmCampaign,
+            utmTerm: parsedLead.utmTerm,
+            utmContent: parsedLead.utmContent,
+            googleClickId: parsedLead.googleClickId,
+            microsoftClickId: parsedLead.microsoftClickId,
+            facebookClickId: parsedLead.facebookClickId,
+            formSubmissionTime: parsedLead.formSubmissionTime,
+            formType: parsedLead.formType
+          }
+        },
+        extractId: (response: any) => response.createOneObject?.id
+      },
+      {
+        name: 'Generic Object Creation',
+        mutation: `
+          mutation CreateRecord($objectName: String!, $data: JSON!) {
+            createOneObject(objectName: $objectName, data: $data) {
+              id
+            }
+          }
+        `,
+        variables: {
+          objectName: "person",
+          data: {
+            name: parsedLead.name,
+            email: parsedLead.email,
+            phone: parsedLead.phone
+          }
+        },
+        extractId: (response: any) => response.createOneObject?.id
+      },
+      {
+        name: 'Simple Person Creation',
+        mutation: `
+          mutation CreateSimplePerson($name: String!, $email: String, $phone: String) {
+            createOneObject(objectName: "person", data: {
+              name: $name,
+              email: $email,
+              phone: $phone
+            }) {
+              id
+            }
+          }
+        `,
+        variables: {
+          name: parsedLead.name,
+          email: parsedLead.email,
+          phone: parsedLead.phone
+        },
+        extractId: (response: any) => response.createOneObject?.id
       }
+    ];
 
-      throw error;
+    for (const approach of approaches) {
+      try {
+        logger.info(`Trying GraphQL approach: ${approach.name}`);
+        logger.debug('Mutation:', approach.mutation);
+        logger.debug('Variables:', approach.variables);
+
+        const response: any = await this.client.request(approach.mutation, approach.variables);
+        const leadId = approach.extractId(response);
+        
+        if (leadId) {
+          logger.info(`✅ Successfully created person using ${approach.name} with ID: ${leadId}`);
+          return leadId;
+        } else {
+          logger.warn(`⚠️ ${approach.name} succeeded but no ID returned:`, response);
+        }
+
+      } catch (error) {
+        logger.warn(`❌ ${approach.name} failed:`, error instanceof Error ? error.message : String(error));
+        
+        // Log detailed error for the first approach only to avoid spam
+        if (approach === approaches[0] && error instanceof Error) {
+          logger.debug('Detailed error for first approach:', {
+            message: error.message,
+            response: (error as any).response,
+            leadData: parsedLead
+          });
+        }
+        
+        continue; // Try next approach
+      }
     }
+
+    throw new Error('All GraphQL approaches failed for Twenty CRM');
   }
 
   private transformToCRMFormat(parsedLead: ParsedLead): TwentyCRMLead {
