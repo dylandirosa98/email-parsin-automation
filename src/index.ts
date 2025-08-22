@@ -11,6 +11,8 @@ import deduplicationService from './utils/deduplication';
 import gmailService from './services/gmail';
 import emailParserService from './services/parser';
 import twentyCRMService from './services/crm';
+import multiCRMService from './services/multi-crm';
+import csvCRMService from './services/csv-crm';
 import { AppConfig } from './types';
 
 
@@ -131,15 +133,20 @@ class EmailParserApp {
     // Test connections endpoint
     this.app.get('/test', async (req, res) => {
       try {
-        const [gmailTest, crmTest] = await Promise.all([
+        const [gmailTest, crmTest, multiCrmTest] = await Promise.all([
           gmailService.testConnection(),
-          twentyCRMService.testConnection()
+          twentyCRMService.testConnection(),
+          multiCRMService.testConnections()
         ]);
+
+        const enabledMethods = multiCRMService.getEnabledMethods();
 
         res.json({
           gmail: gmailTest,
           crm: crmTest,
-          overall: gmailTest && crmTest
+          multiCRM: multiCrmTest,
+          enabledMethods: enabledMethods,
+          overall: gmailTest && Object.values(multiCrmTest).some(Boolean)
         });
       } catch (error) {
         logger.error('Connection test failed:', error);
@@ -147,6 +154,23 @@ class EmailParserApp {
           error: 'Connection test failed',
           message: error instanceof Error ? error.message : 'Unknown error'
         });
+      }
+    });
+
+    // CSV download endpoint
+    this.app.get('/leads-csv', (req, res) => {
+      try {
+        const csvPath = csvCRMService.getCSVFilePath();
+        const leadCount = csvCRMService.getLeadCount();
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="leads-export-${new Date().toISOString().split('T')[0]}.csv"`);
+        res.setHeader('X-Lead-Count', leadCount.toString());
+        
+        res.sendFile(csvPath);
+      } catch (error) {
+        logger.error('CSV download error:', error);
+        res.status(500).json({ error: 'CSV download failed', details: error instanceof Error ? error.message : String(error) });
       }
     });
 
@@ -240,15 +264,22 @@ class EmailParserApp {
             continue;
           }
 
-          // Create lead in CRM
-          const leadId = await twentyCRMService.createLead(parsedLead);
-          if (leadId) {
-            logger.info(`Successfully created lead ${leadId} from email ${email.messageId}`);
-            deduplicationService.markAsProcessed(email.messageId, 'success', leadId);
-            created++;
-          } else {
-            logger.error(`Failed to create lead from email ${email.messageId}`);
-            deduplicationService.markAsProcessed(email.messageId, 'failed', undefined, 'CRM creation failed');
+          // Create lead in CRM using multiple methods
+          try {
+            const leadId = await multiCRMService.createLead(parsedLead);
+            if (leadId) {
+              logger.info(`Successfully created lead ${leadId} from email ${email.messageId}`);
+              deduplicationService.markAsProcessed(email.messageId, 'success', leadId);
+              created++;
+            } else {
+              logger.error(`Failed to create lead from email ${email.messageId}`);
+              deduplicationService.markAsProcessed(email.messageId, 'failed', undefined, 'All CRM methods failed');
+              errors++;
+            }
+          } catch (error) {
+            logger.error(`Error creating lead from email ${email.messageId}:`, error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            deduplicationService.markAsProcessed(email.messageId, 'failed', undefined, errorMessage);
             errors++;
           }
 
