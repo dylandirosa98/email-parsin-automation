@@ -91,6 +91,7 @@ export type UTMSource =
   | 'google_organic'
   | 'google_business'
   | 'google_ads'
+  | 'google_lsas'
   | 'facebook'
   | 'facebook_ads'
   | 'instagram'
